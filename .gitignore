@@ -8,6 +8,5 @@
 local.properties
 
 # Copy thủ công trước khi push
-app/src/main/assets/model/yolo_traffic_sign.tflite
 app/src/main/assets/signs.json
 app/src/main/assets/test_image.jpg
