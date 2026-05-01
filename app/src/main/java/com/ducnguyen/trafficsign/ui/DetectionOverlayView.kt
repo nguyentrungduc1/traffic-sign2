@@ -22,8 +22,8 @@ class DetectionOverlayView @JvmOverloads constructor(
     }
 
     private var detections: List<Detection> = emptyList()
-    private var frameW: Int = 1
-    private var frameH: Int = 1
+    private var frameW: Int = 640
+    private var frameH: Int = 480
 
     fun updateDetections(dets: List<Detection>, fw: Int, fh: Int) {
         detections = dets; frameW = fw; frameH = fh
@@ -32,16 +32,19 @@ class DetectionOverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (frameW <= 0 || frameH <= 0) return
 
-        // FIT_CENTER: scale đều, căn giữa — khớp với PreviewView.ScaleType.FIT_CENTER
+        // FIT_CENTER: giữ aspect ratio, căn giữa
         val scale = minOf(width.toFloat() / frameW, height.toFloat() / frameH)
         val dx = (width - frameW * scale) / 2f
         val dy = (height - frameH * scale) / 2f
 
         for (det in detections) {
             val rect = RectF(
-                det.x1 * scale + dx, det.y1 * scale + dy,
-                det.x2 * scale + dx, det.y2 * scale + dy
+                det.x1 * scale + dx,
+                det.y1 * scale + dy,
+                det.x2 * scale + dx,
+                det.y2 * scale + dy
             )
             canvas.drawRect(rect, boxPaint)
 
@@ -49,7 +52,6 @@ class DetectionOverlayView @JvmOverloads constructor(
             val tw = textPaint.measureText(label)
             val th = textPaint.textSize
             val textTop = (rect.top - th - 4f).coerceAtLeast(dy)
-
             canvas.drawRect(rect.left, textTop, rect.left + tw + 8f, textTop + th + 8f, textBgPaint)
             canvas.drawText(label, rect.left + 4f, textTop + th, textPaint)
         }

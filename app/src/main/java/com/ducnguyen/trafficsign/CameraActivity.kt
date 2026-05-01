@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.util.Size
 import android.view.View
 import android.widget.Button
 import android.widget.Toast
@@ -54,6 +55,9 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         private const val CAMERA_PERMISSION = Manifest.permission.CAMERA
         private const val REQUEST_CODE = 100
         private const val DEBUG_IMAGE = "test_image.jpg"
+        // Khớp với bitmap thực tế từ ImageProxy
+        private const val ANALYSIS_WIDTH = 640
+        private const val ANALYSIS_HEIGHT = 480
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -125,14 +129,19 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun startCamera() {
         ProcessCameraProvider.getInstance(this).addListener({
             val provider = ProcessCameraProvider.getInstance(this).get()
+
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
+
             val analyzer = ImageAnalysis.Builder()
+                // Hardcode 640x480 để khớp bitmap thực tế — không để CameraX tự chọn
+                .setTargetResolution(Size(ANALYSIS_WIDTH, ANALYSIS_HEIGHT))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build().also {
                     it.setAnalyzer(cameraExecutor) { proxy -> processFrame(proxy) }
                 }
+
             try {
                 provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
@@ -149,7 +158,6 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try {
             val bitmap = proxy.toBitmap()
 
-            // Log 1 lần duy nhất
             if (!loggedOnce) {
                 Log.d(TAG, "bitmap: ${bitmap.width}x${bitmap.height}")
                 Log.d(TAG, "rotation: ${proxy.imageInfo.rotationDegrees}")
