@@ -1,0 +1,3 @@
+-keep class com.ducnguyen.trafficsign.model.** { *; }
+-keep class org.tensorflow.lite.** { *; }
+-dontwarn org.tensorflow.lite.**
