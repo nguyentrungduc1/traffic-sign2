@@ -2,7 +2,7 @@ package com.ducnguyen.trafficsign
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
+import android.graphics.*
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -10,20 +10,20 @@ import android.util.Log
 import android.util.Size
 import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.ducnguyen.trafficsign.detector.YoloDetector
+import com.ducnguyen.trafficsign.model.Detection
 import com.ducnguyen.trafficsign.ocr.SpeedOcrHelper
 import com.ducnguyen.trafficsign.repository.SignRepository
 import com.ducnguyen.trafficsign.ui.DebugImageView
-import com.ducnguyen.trafficsign.ui.DetectionOverlayView
 import com.ducnguyen.trafficsign.ui.SignListAdapter
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -32,8 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
-    private lateinit var previewView: PreviewView
-    private lateinit var overlayView: DetectionOverlayView
+    private lateinit var cameraImageView: ImageView
     private lateinit var debugImageView: DebugImageView
     private lateinit var btnDebug: Button
     private lateinit var recyclerView: RecyclerView
@@ -45,34 +44,37 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private lateinit var cameraExecutor: ExecutorService
 
+    // Paint để vẽ box trực tiếp lên bitmap
+    private val boxPaint = Paint().apply {
+        color = Color.GREEN; strokeWidth = 4f; style = Paint.Style.STROKE
+    }
+    private val textBgPaint = Paint().apply {
+        color = Color.GREEN; style = Paint.Style.FILL
+    }
+    private val textPaint = Paint().apply {
+        color = Color.BLACK; textSize = 32f
+        style = Paint.Style.FILL; typeface = Typeface.DEFAULT_BOLD
+    }
+
     private var ttsReady = false
     private val isAnalyzing = AtomicBoolean(false)
     private var isDebugMode = false
-    private var loggedOnce = false
 
     companion object {
         private const val TAG = "TrafficSign"
         private const val CAMERA_PERMISSION = Manifest.permission.CAMERA
         private const val REQUEST_CODE = 100
         private const val DEBUG_IMAGE = "test_image.jpg"
-        // Khớp với bitmap thực tế từ ImageProxy
-        private const val ANALYSIS_WIDTH = 640
-        private const val ANALYSIS_HEIGHT = 480
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
 
-        previewView    = findViewById(R.id.preview_view)
-        overlayView    = findViewById(R.id.overlay_view)
-        debugImageView = findViewById(R.id.debug_image_view)
-        btnDebug       = findViewById(R.id.btn_debug)
-        recyclerView   = findViewById(R.id.recycler_view)
-
-        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
-        overlayView.bringToFront()
+        cameraImageView = findViewById(R.id.camera_image_view)
+        debugImageView  = findViewById(R.id.debug_image_view)
+        btnDebug        = findViewById(R.id.btn_debug)
+        recyclerView    = findViewById(R.id.recycler_view)
 
         adapter = SignListAdapter()
         recyclerView.layoutManager = LinearLayoutManager(this)
@@ -96,14 +98,12 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun toggleDebug() {
         isDebugMode = !isDebugMode
         if (isDebugMode) {
-            previewView.visibility = View.GONE
-            overlayView.visibility = View.GONE
+            cameraImageView.visibility = View.GONE
             debugImageView.visibility = View.VISIBLE
             btnDebug.text = "Camera"
             runDebug()
         } else {
-            previewView.visibility = View.VISIBLE
-            overlayView.visibility = View.VISIBLE
+            cameraImageView.visibility = View.VISIBLE
             debugImageView.visibility = View.GONE
             btnDebug.text = "Debug"
         }
@@ -129,22 +129,16 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun startCamera() {
         ProcessCameraProvider.getInstance(this).addListener({
             val provider = ProcessCameraProvider.getInstance(this).get()
-
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-
             val analyzer = ImageAnalysis.Builder()
-                // Hardcode 640x480 để khớp bitmap thực tế — không để CameraX tự chọn
-                .setTargetResolution(Size(ANALYSIS_WIDTH, ANALYSIS_HEIGHT))
+                .setTargetResolution(Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build().also {
                     it.setAnalyzer(cameraExecutor) { proxy -> processFrame(proxy) }
                 }
-
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
+                // Không bind Preview nữa — dùng ImageView thay thế
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analyzer)
             } catch (e: Exception) {
                 Log.e(TAG, "Camera bind failed", e)
             }
@@ -157,20 +151,13 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         try {
             val bitmap = proxy.toBitmap()
-
-            if (!loggedOnce) {
-                Log.d(TAG, "bitmap: ${bitmap.width}x${bitmap.height}")
-                Log.d(TAG, "rotation: ${proxy.imageInfo.rotationDegrees}")
-                runOnUiThread {
-                    Log.d(TAG, "previewView: ${previewView.width}x${previewView.height}")
-                    Log.d(TAG, "overlayView: ${overlayView.width}x${overlayView.height}")
-                }
-                loggedOnce = true
-            }
-
             val dets = detector.detect(bitmap)
+
+            // Vẽ box trực tiếp lên bitmap — không cần coordinate transform
+            val drawn = drawDetections(bitmap, dets)
+
             runOnUiThread {
-                overlayView.updateDetections(dets, bitmap.width, bitmap.height)
+                cameraImageView.setImageBitmap(drawn)
             }
 
             for (det in dets.take(5)) {
@@ -191,6 +178,22 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             proxy.close()
             isAnalyzing.set(false)
         }
+    }
+
+    private fun drawDetections(src: Bitmap, dets: List<Detection>): Bitmap {
+        val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(out)
+        for (det in dets) {
+            val rect = RectF(det.x1, det.y1, det.x2, det.y2)
+            canvas.drawRect(rect, boxPaint)
+            val label = "${det.signId} ${(det.confidence * 100).toInt()}%"
+            val tw = textPaint.measureText(label)
+            val th = textPaint.textSize
+            val textTop = (rect.top - th - 4f).coerceAtLeast(0f)
+            canvas.drawRect(rect.left, textTop, rect.left + tw + 8f, textTop + th + 8f, textBgPaint)
+            canvas.drawText(label, rect.left + 4f, textTop + th, textPaint)
+        }
+        return out
     }
 
     private fun cropBitmap(bmp: Bitmap, x1: Float, y1: Float, x2: Float, y2: Float): Bitmap {
