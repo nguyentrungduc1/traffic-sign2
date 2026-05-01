@@ -47,6 +47,7 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     private val isAnalyzing = AtomicBoolean(false)
     private var isDebugMode = false
+    private var loggedOnce = false
 
     companion object {
         private const val TAG = "TrafficSign"
@@ -65,7 +66,6 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         btnDebug       = findViewById(R.id.btn_debug)
         recyclerView   = findViewById(R.id.recycler_view)
 
-        // Landscape: camera sensor = 0° rotation → không cần rotate bitmap
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
         overlayView.bringToFront()
@@ -114,7 +114,6 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         debugImageView.setImage(bitmap)
         debugImageView.setDetections(emptyList())
-
         cameraExecutor.execute {
             val dets = detector.detect(bitmap)
             Log.d(TAG, "DEBUG: ${dets.size} detections on ${bitmap.width}x${bitmap.height}")
@@ -148,10 +147,20 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (!isAnalyzing.compareAndSet(false, true)) { proxy.close(); return }
 
         try {
-            // Landscape cố định → camera sensor không bị xoay → toBitmap() thẳng
             val bitmap = proxy.toBitmap()
-            val dets = detector.detect(bitmap)
 
+            // Log 1 lần duy nhất
+            if (!loggedOnce) {
+                Log.d(TAG, "bitmap: ${bitmap.width}x${bitmap.height}")
+                Log.d(TAG, "rotation: ${proxy.imageInfo.rotationDegrees}")
+                runOnUiThread {
+                    Log.d(TAG, "previewView: ${previewView.width}x${previewView.height}")
+                    Log.d(TAG, "overlayView: ${overlayView.width}x${overlayView.height}")
+                }
+                loggedOnce = true
+            }
+
+            val dets = detector.detect(bitmap)
             runOnUiThread {
                 overlayView.updateDetections(dets, bitmap.width, bitmap.height)
             }
@@ -159,7 +168,6 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             for (det in dets.take(5)) {
                 val sign = signRepository.getSign(det.signId) ?: continue
                 if (!signRepository.shouldAnnounce(det.signId)) continue
-
                 if (det.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
                     val cropped = cropBitmap(bitmap, det.x1, det.y1, det.x2, det.y2)
                     ocrHelper.recognizeSpeed(cropped) { speed ->
