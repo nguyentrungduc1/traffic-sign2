@@ -6,7 +6,7 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <!-- ImageView hiển thị bitmap đã vẽ box trực tiếp -->
+    <!-- ImageView hiển thị bitmap đã vẽ box -->
     <ImageView
         android:id="@+id/camera_image_view"
         android:layout_width="0dp"
@@ -18,19 +18,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toStartOf="@id/recycler_view" />
 
-    <!-- Debug image view -->
-    <com.ducnguyen.trafficsign.ui.DebugImageView
-        android:id="@+id/debug_image_view"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:visibility="gone"
-        android:background="#111111"
-        app:layout_constraintTop_toTopOf="@id/camera_image_view"
-        app:layout_constraintBottom_toBottomOf="@id/camera_image_view"
-        app:layout_constraintStart_toStartOf="@id/camera_image_view"
-        app:layout_constraintEnd_toEndOf="@id/camera_image_view" />
-
-    <!-- Danh sách biển - bên phải 30% -->
+    <!-- Danh sách biển bên phải 30% -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recycler_view"
         android:layout_width="0dp"
@@ -42,18 +30,5 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintWidth_percent="0.30"
         app:layout_constraintStart_toEndOf="@id/camera_image_view" />
-
-    <!-- Debug toggle button -->
-    <Button
-        android:id="@+id/btn_debug"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Debug"
-        android:textSize="11sp"
-        android:alpha="0.85"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/recycler_view"
-        android:layout_marginTop="6dp"
-        android:layout_marginEnd="6dp" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

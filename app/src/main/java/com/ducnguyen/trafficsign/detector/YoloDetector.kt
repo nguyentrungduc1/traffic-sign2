@@ -15,7 +15,7 @@ class YoloDetector(context: Context) {
     private val interpreter: Interpreter
     private val labels: List<String>
     private val inputSize = 640
-    private val confThreshold = 0.2f
+    private val confThreshold = 0.25f
     private val iouThreshold = 0.45f
     private val numClasses = 70
 
@@ -54,15 +54,14 @@ class YoloDetector(context: Context) {
     }
 
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // NHWC [1, 640, 640, 3]
         val buffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4)
         buffer.order(ByteOrder.nativeOrder())
         val pixels = IntArray(inputSize * inputSize)
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
         for (pixel in pixels) {
-            buffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f) // R
-            buffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)  // G
-            buffer.putFloat((pixel and 0xFF) / 255.0f)           // B
+            buffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
+            buffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
+            buffer.putFloat((pixel and 0xFF) / 255.0f)
         }
         buffer.rewind()
         return buffer
@@ -70,9 +69,7 @@ class YoloDetector(context: Context) {
 
     private fun parseOutput(output: Array<FloatArray>, origW: Int, origH: Int): List<Detection> {
         val boxes = mutableListOf<FloatArray>()
-
         for (i in 0 until 8400) {
-            // output[row][anchor]: row 0-3 = xc,yc,w,h normalized 0-1, row 4-73 = class scores
             val xc = output[0][i]
             val yc = output[1][i]
             val w  = output[2][i]
@@ -87,8 +84,6 @@ class YoloDetector(context: Context) {
 
             if (maxConf < confThreshold) continue
 
-            // xc,yc,w,h là normalized 0-1 trong không gian input 640x640
-            // Scale về pixel ảnh gốc: nhân thẳng với origW/origH
             val x1 = ((xc - w / 2f) * origW).coerceIn(0f, origW.toFloat())
             val y1 = ((yc - h / 2f) * origH).coerceIn(0f, origH.toFloat())
             val x2 = ((xc + w / 2f) * origW).coerceIn(0f, origW.toFloat())
@@ -97,7 +92,6 @@ class YoloDetector(context: Context) {
             if (x2 <= x1 || y2 <= y1) continue
             boxes.add(floatArrayOf(x1, y1, x2, y2, maxConf, maxIdx.toFloat()))
         }
-
         return nms(boxes).map { box ->
             Detection(
                 signId = labels[box[5].toInt()],

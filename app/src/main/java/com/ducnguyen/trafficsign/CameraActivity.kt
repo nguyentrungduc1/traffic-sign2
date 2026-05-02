@@ -3,13 +3,11 @@ package com.ducnguyen.trafficsign
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.util.Size
-import android.view.View
-import android.widget.Button
+import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -23,7 +21,6 @@ import com.ducnguyen.trafficsign.detector.YoloDetector
 import com.ducnguyen.trafficsign.model.Detection
 import com.ducnguyen.trafficsign.ocr.SpeedOcrHelper
 import com.ducnguyen.trafficsign.repository.SignRepository
-import com.ducnguyen.trafficsign.ui.DebugImageView
 import com.ducnguyen.trafficsign.ui.SignListAdapter
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -33,8 +30,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var cameraImageView: ImageView
-    private lateinit var debugImageView: DebugImageView
-    private lateinit var btnDebug: Button
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: SignListAdapter
 
@@ -44,39 +39,42 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var tts: TextToSpeech
     private lateinit var cameraExecutor: ExecutorService
 
-    // Paint để vẽ box trực tiếp lên bitmap
     private val boxPaint = Paint().apply {
-        color = Color.GREEN; strokeWidth = 4f; style = Paint.Style.STROKE
+        color = Color.GREEN; strokeWidth = 3f; style = Paint.Style.STROKE
     }
     private val textBgPaint = Paint().apply {
         color = Color.GREEN; style = Paint.Style.FILL
     }
     private val textPaint = Paint().apply {
-        color = Color.BLACK; textSize = 32f
+        color = Color.BLACK; textSize = 28f
         style = Paint.Style.FILL; typeface = Typeface.DEFAULT_BOLD
     }
 
     private var ttsReady = false
     private val isAnalyzing = AtomicBoolean(false)
-    private var isDebugMode = false
+
+    // Resolution để detect — nhỏ hơn để nhanh hơn
+    private val detectW = 320
+    private val detectH = 240
 
     companion object {
         private const val TAG = "TrafficSign"
         private const val CAMERA_PERMISSION = Manifest.permission.CAMERA
         private const val REQUEST_CODE = 100
-        private const val DEBUG_IMAGE = "test_image.jpg"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Giữ màn hình luôn sáng
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         setContentView(R.layout.activity_camera)
 
         cameraImageView = findViewById(R.id.camera_image_view)
-        debugImageView  = findViewById(R.id.debug_image_view)
-        btnDebug        = findViewById(R.id.btn_debug)
         recyclerView    = findViewById(R.id.recycler_view)
 
-        adapter = SignListAdapter()
+        adapter = SignListAdapter(this)
         recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = adapter
 
@@ -86,43 +84,10 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts            = TextToSpeech(this, this)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        btnDebug.setOnClickListener { toggleDebug() }
-
         if (ContextCompat.checkSelfPermission(this, CAMERA_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
         } else {
             ActivityCompat.requestPermissions(this, arrayOf(CAMERA_PERMISSION), REQUEST_CODE)
-        }
-    }
-
-    private fun toggleDebug() {
-        isDebugMode = !isDebugMode
-        if (isDebugMode) {
-            cameraImageView.visibility = View.GONE
-            debugImageView.visibility = View.VISIBLE
-            btnDebug.text = "Camera"
-            runDebug()
-        } else {
-            cameraImageView.visibility = View.VISIBLE
-            debugImageView.visibility = View.GONE
-            btnDebug.text = "Debug"
-        }
-    }
-
-    private fun runDebug() {
-        val bitmap = try {
-            assets.open(DEBUG_IMAGE).use { BitmapFactory.decodeStream(it) }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Không tìm thấy $DEBUG_IMAGE trong assets", Toast.LENGTH_LONG).show()
-            return
-        }
-        debugImageView.setImage(bitmap)
-        debugImageView.setDetections(emptyList())
-        cameraExecutor.execute {
-            val dets = detector.detect(bitmap)
-            Log.d(TAG, "DEBUG: ${dets.size} detections on ${bitmap.width}x${bitmap.height}")
-            dets.forEach { Log.d(TAG, "DEBUG: ${it.signId} ${it.confidence} [${it.x1},${it.y1},${it.x2},${it.y2}]") }
-            runOnUiThread { debugImageView.setDetections(dets) }
         }
     }
 
@@ -137,7 +102,6 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             try {
                 provider.unbindAll()
-                // Không bind Preview nữa — dùng ImageView thay thế
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analyzer)
             } catch (e: Exception) {
                 Log.e(TAG, "Camera bind failed", e)
@@ -146,30 +110,52 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun processFrame(proxy: ImageProxy) {
-        if (isDebugMode) { proxy.close(); return }
         if (!isAnalyzing.compareAndSet(false, true)) { proxy.close(); return }
 
         try {
-            val bitmap = proxy.toBitmap()
-            val dets = detector.detect(bitmap)
+            // Bitmap gốc để hiển thị và crop OCR
+            val fullBitmap = proxy.toBitmap()
 
-            // Vẽ box trực tiếp lên bitmap — không cần coordinate transform
-            val drawn = drawDetections(bitmap, dets)
+            // Bitmap nhỏ để detect — nhanh hơn 4x
+            val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
+            val dets = detector.detect(smallBitmap)
+
+            // Scale tọa độ box từ 320x240 về kích thước gốc
+            val scaleX = fullBitmap.width.toFloat() / detectW
+            val scaleY = fullBitmap.height.toFloat() / detectH
+            val scaledDets = dets.map { det ->
+                det.copy(
+                    x1 = det.x1 * scaleX,
+                    y1 = det.y1 * scaleY,
+                    x2 = det.x2 * scaleX,
+                    y2 = det.y2 * scaleY
+                )
+            }
+
+            // Vẽ box lên bitmap gốc
+            val drawn = drawDetections(fullBitmap, scaledDets)
 
             runOnUiThread {
                 cameraImageView.setImageBitmap(drawn)
             }
 
-            for (det in dets.take(5)) {
+            for (det in scaledDets.take(5)) {
                 val sign = signRepository.getSign(det.signId) ?: continue
                 if (!signRepository.shouldAnnounce(det.signId)) continue
+
                 if (det.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
-                    val cropped = cropBitmap(bitmap, det.x1, det.y1, det.x2, det.y2)
+                    val cropped = cropBitmap(fullBitmap, det.x1, det.y1, det.x2, det.y2)
                     ocrHelper.recognizeSpeed(cropped) { speed ->
-                        runOnUiThread { adapter.addSign(sign); speak(signRepository.buildTtsText(sign, speed)) }
+                        runOnUiThread {
+                            adapter.addSign(sign)
+                            speak(signRepository.buildTtsText(sign, speed))
+                        }
                     }
                 } else {
-                    runOnUiThread { adapter.addSign(sign); speak(signRepository.buildTtsText(sign, null)) }
+                    runOnUiThread {
+                        adapter.addSign(sign)
+                        speak(signRepository.buildTtsText(sign, null))
+                    }
                 }
             }
         } catch (e: Exception) {
