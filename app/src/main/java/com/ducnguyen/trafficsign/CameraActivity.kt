@@ -3,24 +3,20 @@ package com.ducnguyen.trafficsign
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.RectF
 import android.os.Bundle
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.util.Size
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.camera.view.transform.CoordinateTransform
-import androidx.camera.view.transform.ImageProxyTransformFactory
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -51,13 +47,13 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private val isAnalyzing = AtomicBoolean(false)
     private val isOcrRunning = AtomicBoolean(false)
-    private val imageTransformFactory = ImageProxyTransformFactory().apply {
-        setUsingCropRect(false)
-        setUsingRotationDegrees(true)
-    }
 
     private var ttsReady = false
     private var lastAnalysisTimeMs = 0L
+    private var lastDebugLogTimeMs = 0L
+
+    private val detectW = 320
+    private val detectH = 240
 
     companion object {
         private const val TAG = "TrafficSign"
@@ -102,29 +98,19 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun bindCameraUseCases(provider: ProcessCameraProvider) {
         val preview = Preview.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setTargetResolution(Size(640, 480))
             .build()
             .also { it.setSurfaceProvider(previewView.surfaceProvider) }
 
         val analyzer = ImageAnalysis.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setTargetResolution(Size(640, 480))
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
             .also { it.setAnalyzer(cameraExecutor) { proxy -> processFrame(proxy) } }
 
         try {
             provider.unbindAll()
-            val viewPort = previewView.viewPort
-            if (viewPort != null) {
-                val useCaseGroup = UseCaseGroup.Builder()
-                    .addUseCase(preview)
-                    .addUseCase(analyzer)
-                    .setViewPort(viewPort)
-                    .build()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, useCaseGroup)
-            } else {
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
-            }
+            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analyzer)
         } catch (e: Exception) {
             Log.e(TAG, "Camera bind failed", e)
         }
@@ -143,15 +129,32 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         lastAnalysisTimeMs = now
 
         try {
-            val bitmap = proxy.toBitmap()
-            val detections = detector.detect(bitmap)
-            val overlayDetections = mapDetectionsToPreview(proxy, detections)
+            val fullBitmap = proxy.toBitmap()
+            val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
+            val detections = detector.detect(smallBitmap)
+
+            val scaleX = fullBitmap.width.toFloat() / detectW
+            val scaleY = fullBitmap.height.toFloat() / detectH
+            val scaledDetections = detections.map { detection ->
+                detection.copy(
+                    x1 = detection.x1 * scaleX,
+                    y1 = detection.y1 * scaleY,
+                    x2 = detection.x2 * scaleX,
+                    y2 = detection.y2 * scaleY
+                )
+            }
+            val overlayDetections = mapDetectionsWithFitCenter(
+                fullBitmap.width,
+                fullBitmap.height,
+                scaledDetections
+            )
+            logDetectionState(now, fullBitmap, scaledDetections.size)
 
             runOnUiThread {
                 overlayView.updateDetections(overlayDetections)
             }
 
-            handleAnnouncements(bitmap, detections)
+            handleAnnouncements(fullBitmap, scaledDetections)
         } catch (e: Exception) {
             Log.e(TAG, "processFrame error", e)
         } finally {
@@ -160,33 +163,28 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun mapDetectionsToPreview(proxy: ImageProxy, detections: List<Detection>): List<Detection> {
-        if (detections.isEmpty()) return emptyList()
-
-        val source = imageTransformFactory.getOutputTransform(proxy)
-        val target = previewView.outputTransform
-        if (source == null || target == null) {
-            return mapDetectionsWithFitCenterFallback(proxy, detections)
-        }
-
-        val transform = CoordinateTransform(source, target)
-        return detections.map { detection ->
-            val rect = RectF(detection.x1, detection.y1, detection.x2, detection.y2)
-            transform.mapRect(rect)
-            detection.copy(x1 = rect.left, y1 = rect.top, x2 = rect.right, y2 = rect.bottom)
-        }
+    private fun logDetectionState(now: Long, bitmap: Bitmap, count: Int) {
+        if (now - lastDebugLogTimeMs < 1000L) return
+        lastDebugLogTimeMs = now
+        Log.d(
+            TAG,
+            "bitmap=${bitmap.width}x${bitmap.height}, detections=$count, " +
+                "preview=${previewView.width}x${previewView.height}, " +
+                "overlay=${overlayView.width}x${overlayView.height}"
+        )
     }
 
-    private fun mapDetectionsWithFitCenterFallback(
-        proxy: ImageProxy,
+    private fun mapDetectionsWithFitCenter(
+        frameWidth: Int,
+        frameHeight: Int,
         detections: List<Detection>
     ): List<Detection> {
         val viewW = overlayView.width.toFloat()
         val viewH = overlayView.height.toFloat()
         if (viewW <= 0f || viewH <= 0f) return emptyList()
 
-        val frameW = proxy.width.toFloat()
-        val frameH = proxy.height.toFloat()
+        val frameW = frameWidth.toFloat()
+        val frameH = frameHeight.toFloat()
         val scale = minOf(viewW / frameW, viewH / frameH)
         val dx = (viewW - frameW * scale) / 2f
         val dy = (viewH - frameH * scale) / 2f
