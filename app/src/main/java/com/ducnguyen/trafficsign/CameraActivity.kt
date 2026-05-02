@@ -52,14 +52,11 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastAnalysisTimeMs = 0L
     private var lastDebugLogTimeMs = 0L
 
-    private val detectW = 320
-    private val detectH = 240
-
     companion object {
         private const val TAG = "TrafficSign"
         private const val CAMERA_PERMISSION = Manifest.permission.CAMERA
         private const val REQUEST_CODE = 100
-        private const val MIN_ANALYSIS_INTERVAL_MS = 100L
+        private const val MIN_ANALYSIS_INTERVAL_MS = 80L
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,31 +127,21 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         try {
             val fullBitmap = proxy.toBitmap()
-            val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
-            val detections = detector.detect(smallBitmap)
-
-            val scaleX = fullBitmap.width.toFloat() / detectW
-            val scaleY = fullBitmap.height.toFloat() / detectH
-            val scaledDetections = detections.map { detection ->
-                detection.copy(
-                    x1 = detection.x1 * scaleX,
-                    y1 = detection.y1 * scaleY,
-                    x2 = detection.x2 * scaleX,
-                    y2 = detection.y2 * scaleY
-                )
-            }
+            val detectStartMs = SystemClock.elapsedRealtime()
+            val detections = detector.detect(fullBitmap)
+            val detectMs = SystemClock.elapsedRealtime() - detectStartMs
             val overlayDetections = mapDetectionsWithFitCenter(
                 fullBitmap.width,
                 fullBitmap.height,
-                scaledDetections
+                detections
             )
-            logDetectionState(now, fullBitmap, scaledDetections.size)
+            logDetectionState(now, fullBitmap, detections.size, detectMs)
 
             runOnUiThread {
-                overlayView.updateDetections(overlayDetections)
+                overlayView.updateDetections(overlayDetections, now)
             }
 
-            handleAnnouncements(fullBitmap, scaledDetections)
+            handleAnnouncements(fullBitmap, detections)
         } catch (e: Exception) {
             Log.e(TAG, "processFrame error", e)
         } finally {
@@ -163,12 +150,12 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun logDetectionState(now: Long, bitmap: Bitmap, count: Int) {
+    private fun logDetectionState(now: Long, bitmap: Bitmap, count: Int, detectMs: Long) {
         if (now - lastDebugLogTimeMs < 1000L) return
         lastDebugLogTimeMs = now
         Log.d(
             TAG,
-            "bitmap=${bitmap.width}x${bitmap.height}, detections=$count, " +
+            "bitmap=${bitmap.width}x${bitmap.height}, detections=$count, detectMs=$detectMs, " +
                 "preview=${previewView.width}x${previewView.height}, " +
                 "overlay=${overlayView.width}x${overlayView.height}"
         )

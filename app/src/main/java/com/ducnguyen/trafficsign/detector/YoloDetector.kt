@@ -18,6 +18,13 @@ class YoloDetector(context: Context) {
     private val confThreshold = 0.25f
     private val iouThreshold = 0.45f
     private val numClasses = 70
+    private val maxNmsCandidates = 120
+    private val maxDetections = 10
+    private val inputBuffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4).apply {
+        order(ByteOrder.nativeOrder())
+    }
+    private val pixels = IntArray(inputSize * inputSize)
+    private val output = Array(1) { Array(74) { FloatArray(8400) } }
 
     companion object {
         private const val MODEL_PATH = "model/yolo_traffic_sign.tflite"
@@ -45,26 +52,24 @@ class YoloDetector(context: Context) {
         return inputStream.channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
     }
 
+    @Synchronized
     fun detect(bitmap: Bitmap): List<Detection> {
         val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
-        val inputBuffer = bitmapToByteBuffer(resized)
-        val output = Array(1) { Array(74) { FloatArray(8400) } }
+        bitmapToByteBuffer(resized)
+        if (resized !== bitmap) resized.recycle()
         interpreter.run(inputBuffer, output)
         return parseOutput(output[0], bitmap.width, bitmap.height)
     }
 
-    private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4)
-        buffer.order(ByteOrder.nativeOrder())
-        val pixels = IntArray(inputSize * inputSize)
+    private fun bitmapToByteBuffer(bitmap: Bitmap) {
+        inputBuffer.rewind()
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
         for (pixel in pixels) {
-            buffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
-            buffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
-            buffer.putFloat((pixel and 0xFF) / 255.0f)
+            inputBuffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
+            inputBuffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
+            inputBuffer.putFloat((pixel and 0xFF) / 255.0f)
         }
-        buffer.rewind()
-        return buffer
+        inputBuffer.rewind()
     }
 
     private fun parseOutput(output: Array<FloatArray>, origW: Int, origH: Int): List<Detection> {
@@ -92,7 +97,11 @@ class YoloDetector(context: Context) {
             if (x2 <= x1 || y2 <= y1) continue
             boxes.add(floatArrayOf(x1, y1, x2, y2, maxConf, maxIdx.toFloat()))
         }
-        return nms(boxes).map { box ->
+        val candidates = boxes
+            .sortedByDescending { it[4] }
+            .take(maxNmsCandidates)
+
+        return nms(candidates).map { box ->
             Detection(
                 signId = labels[box[5].toInt()],
                 confidence = box[4],
@@ -108,6 +117,7 @@ class YoloDetector(context: Context) {
         for (i in sorted.indices) {
             if (suppressed[i]) continue
             keep.add(sorted[i])
+            if (keep.size >= maxDetections) break
             for (j in i + 1 until sorted.size) {
                 if (!suppressed[j] && iou(sorted[i], sorted[j]) > iouThreshold) suppressed[j] = true
             }
