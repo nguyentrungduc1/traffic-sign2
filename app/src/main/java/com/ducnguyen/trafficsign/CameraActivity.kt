@@ -7,8 +7,9 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.util.Size
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.WindowManager
-import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
@@ -27,9 +28,10 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SurfaceHolder.Callback {
 
-    private lateinit var cameraImageView: ImageView
+    private lateinit var surfaceView: SurfaceView
+    private lateinit var surfaceHolder: SurfaceHolder
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: SignListAdapter
 
@@ -41,6 +43,7 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private val boxPaint = Paint().apply {
         color = Color.GREEN; strokeWidth = 3f; style = Paint.Style.STROKE
+        isAntiAlias = true
     }
     private val textBgPaint = Paint().apply {
         color = Color.GREEN; style = Paint.Style.FILL
@@ -48,12 +51,16 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val textPaint = Paint().apply {
         color = Color.BLACK; textSize = 28f
         style = Paint.Style.FILL; typeface = Typeface.DEFAULT_BOLD
+        isAntiAlias = true
+    }
+    private val bitmapPaint = Paint().apply {
+        isFilterBitmap = true
     }
 
     private var ttsReady = false
     private val isInferencing = AtomicBoolean(false)
+    private var surfaceReady = false
 
-    // Lưu box từ inference lần trước để vẽ lên frame mới
     @Volatile private var lastDetections: List<Detection> = emptyList()
     @Volatile private var lastFrameW: Int = 1
     @Volatile private var lastFrameH: Int = 1
@@ -72,8 +79,11 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_camera)
 
-        cameraImageView = findViewById(R.id.camera_image_view)
-        recyclerView    = findViewById(R.id.recycler_view)
+        surfaceView = findViewById(R.id.surface_view)
+        recyclerView = findViewById(R.id.recycler_view)
+
+        surfaceHolder = surfaceView.holder
+        surfaceHolder.addCallback(this)
 
         adapter = SignListAdapter(this)
         recyclerView.layoutManager = LinearLayoutManager(this)
@@ -91,6 +101,11 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             ActivityCompat.requestPermissions(this, arrayOf(CAMERA_PERMISSION), REQUEST_CODE)
         }
     }
+
+    // SurfaceHolder callbacks
+    override fun surfaceCreated(holder: SurfaceHolder) { surfaceReady = true }
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) { surfaceReady = true }
+    override fun surfaceDestroyed(holder: SurfaceHolder) { surfaceReady = false }
 
     private fun startCamera() {
         ProcessCameraProvider.getInstance(this).addListener({
@@ -114,19 +129,15 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try {
             val fullBitmap = proxy.toBitmap()
 
-            // BƯỚC 1: Vẽ box từ inference LẦN TRƯỚC lên frame hiện tại → display ngay
-            val display = drawDetections(fullBitmap, lastDetections, lastFrameW, lastFrameH)
-            runOnUiThread { cameraImageView.setImageBitmap(display) }
+            // Vẽ frame + box lên SurfaceView trực tiếp — không qua main thread
+            drawToSurface(fullBitmap, lastDetections, lastFrameW, lastFrameH)
 
-            // BƯỚC 2: Nếu inference đang rảnh → chạy inference frame này
+            // Chạy inference song song nếu rảnh
             if (isInferencing.compareAndSet(false, true)) {
                 val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
-
                 cameraExecutor.execute {
                     try {
                         val dets = detector.detect(smallBitmap)
-
-                        // Scale tọa độ về kích thước gốc
                         val scaleX = fullBitmap.width.toFloat() / detectW
                         val scaleY = fullBitmap.height.toFloat() / detectH
                         val scaledDets = dets.map { det ->
@@ -135,17 +146,13 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 x2 = det.x2 * scaleX, y2 = det.y2 * scaleY
                             )
                         }
-
-                        // Lưu kết quả để vẽ lên frame tiếp theo
                         lastDetections = scaledDets
                         lastFrameW = fullBitmap.width
                         lastFrameH = fullBitmap.height
 
-                        // Xử lý TTS + list
                         for (det in scaledDets.take(5)) {
                             val sign = signRepository.getSign(det.signId) ?: continue
                             if (!signRepository.shouldAnnounce(det.signId)) continue
-
                             if (det.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
                                 val cropped = cropBitmap(fullBitmap, det.x1, det.y1, det.x2, det.y2)
                                 ocrHelper.recognizeSpeed(cropped) { speed ->
@@ -177,34 +184,44 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun drawDetections(
-        src: Bitmap,
-        dets: List<Detection>,
-        frameW: Int,
-        frameH: Int
-    ): Bitmap {
-        val out = src.copy(Bitmap.Config.ARGB_8888, true)
-        if (dets.isEmpty()) return out
-        val canvas = Canvas(out)
+    private fun drawToSurface(bitmap: Bitmap, dets: List<Detection>, frameW: Int, frameH: Int) {
+        if (!surfaceReady) return
+        val canvas = surfaceHolder.lockCanvas() ?: return
+        try {
+            val sw = canvas.width.toFloat()
+            val sh = canvas.height.toFloat()
 
-        // Scale tọa độ từ frameW/frameH về src.width/src.height phòng khi kích thước khác nhau
-        val scaleX = src.width.toFloat() / frameW.coerceAtLeast(1)
-        val scaleY = src.height.toFloat() / frameH.coerceAtLeast(1)
+            // Scale bitmap vào surface giữ tỉ lệ FIT_CENTER
+            val scale = minOf(sw / bitmap.width, sh / bitmap.height)
+            val dx = (sw - bitmap.width * scale) / 2f
+            val dy = (sh - bitmap.height * scale) / 2f
 
-        for (det in dets) {
-            val rect = RectF(
-                det.x1 * scaleX, det.y1 * scaleY,
-                det.x2 * scaleX, det.y2 * scaleY
-            )
-            canvas.drawRect(rect, boxPaint)
-            val label = "${det.signId} ${(det.confidence * 100).toInt()}%"
-            val tw = textPaint.measureText(label)
-            val th = textPaint.textSize
-            val textTop = (rect.top - th - 4f).coerceAtLeast(0f)
-            canvas.drawRect(rect.left, textTop, rect.left + tw + 8f, textTop + th + 8f, textBgPaint)
-            canvas.drawText(label, rect.left + 4f, textTop + th, textPaint)
+            val dst = RectF(dx, dy, dx + bitmap.width * scale, dy + bitmap.height * scale)
+            canvas.drawColor(Color.BLACK)
+            canvas.drawBitmap(bitmap, null, dst, bitmapPaint)
+
+            // Vẽ box từ inference lần trước
+            val scaleX = bitmap.width.toFloat() / frameW.coerceAtLeast(1)
+            val scaleY = bitmap.height.toFloat() / frameH.coerceAtLeast(1)
+
+            for (det in dets) {
+                val rect = RectF(
+                    (det.x1 * scaleX) * scale + dx,
+                    (det.y1 * scaleY) * scale + dy,
+                    (det.x2 * scaleX) * scale + dx,
+                    (det.y2 * scaleY) * scale + dy
+                )
+                canvas.drawRect(rect, boxPaint)
+                val label = "${det.signId} ${(det.confidence * 100).toInt()}%"
+                val tw = textPaint.measureText(label)
+                val th = textPaint.textSize
+                val textTop = (rect.top - th - 4f).coerceAtLeast(dy)
+                canvas.drawRect(rect.left, textTop, rect.left + tw + 8f, textTop + th + 8f, textBgPaint)
+                canvas.drawText(label, rect.left + 4f, textTop + th, textPaint)
+            }
+        } finally {
+            surfaceHolder.unlockCanvasAndPost(canvas)
         }
-        return out
     }
 
     private fun cropBitmap(bmp: Bitmap, x1: Float, y1: Float, x2: Float, y2: Float): Bitmap {
