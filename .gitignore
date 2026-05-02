@@ -4,8 +4,13 @@
 /.idea
 .DS_Store
 /build
+/app/build
+/.android-sdk
+/.cache
 /captures
 local.properties
+device-screen.png
+traffic-screen.png
 
 # Copy thủ công trước khi push
 app/src/main/assets/signs.json

@@ -26,11 +26,6 @@ class YoloDetector(context: Context) {
     private val pixels = IntArray(inputSize * inputSize)
     private val output = Array(1) { Array(74) { FloatArray(8400) } }
 
-    companion object {
-        private const val MODEL_PATH = "model/yolo_traffic_sign.tflite"
-        private const val LABELS_PATH = "model/labels.txt"
-    }
-
     init {
         labels = context.assets.open(LABELS_PATH)
             .bufferedReader(Charsets.UTF_8)
@@ -42,8 +37,7 @@ class YoloDetector(context: Context) {
         }
 
         val model = loadModelFile(context)
-        val options = Interpreter.Options().apply { numThreads = 4 }
-        interpreter = Interpreter(model, options)
+        interpreter = Interpreter(model, Interpreter.Options().apply { numThreads = 4 })
     }
 
     private fun loadModelFile(context: Context): MappedByteBuffer {
@@ -135,4 +129,9 @@ class YoloDetector(context: Context) {
     }
 
     fun close() { interpreter.close() }
+
+    companion object {
+        private const val MODEL_PATH = "model/yolo_traffic_sign.tflite"
+        private const val LABELS_PATH = "model/labels.txt"
+    }
 }

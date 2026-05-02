@@ -35,6 +35,12 @@ class DetectionOverlayView @JvmOverloads constructor(
     private var tracks: List<Track> = emptyList()
 
     fun updateDetections(detections: List<Detection>, frameTimeMs: Long = SystemClock.elapsedRealtime()) {
+        if (detections.isEmpty()) {
+            pruneStaleTracks(frameTimeMs)
+            postInvalidateOnAnimation()
+            return
+        }
+
         tracks = detections.map { detection ->
             val previous = findPreviousTrack(detection)
             val dt = previous?.let { (frameTimeMs - it.frameTimeMs).coerceAtLeast(1L).toFloat() }
@@ -51,6 +57,10 @@ class DetectionOverlayView @JvmOverloads constructor(
             )
         }
         postInvalidateOnAnimation()
+    }
+
+    private fun pruneStaleTracks(nowMs: Long) {
+        tracks = tracks.filter { nowMs - it.frameTimeMs <= MAX_STALE_MS }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -121,6 +131,6 @@ class DetectionOverlayView @JvmOverloads constructor(
 
     companion object {
         private const val MAX_PREDICTION_MS = 140L
-        private const val MAX_STALE_MS = 300L
+        private const val MAX_STALE_MS = 800L
     }
 }
