@@ -51,9 +51,13 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private var ttsReady = false
-    private val isAnalyzing = AtomicBoolean(false)
+    private val isInferencing = AtomicBoolean(false)
 
-    // Resolution để detect — nhỏ hơn để nhanh hơn
+    // Lưu box từ inference lần trước để vẽ lên frame mới
+    @Volatile private var lastDetections: List<Detection> = emptyList()
+    @Volatile private var lastFrameW: Int = 1
+    @Volatile private var lastFrameH: Int = 1
+
     private val detectW = 320
     private val detectH = 240
 
@@ -65,10 +69,7 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Giữ màn hình luôn sáng
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
         setContentView(R.layout.activity_camera)
 
         cameraImageView = findViewById(R.id.camera_image_view)
@@ -110,51 +111,62 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun processFrame(proxy: ImageProxy) {
-        if (!isAnalyzing.compareAndSet(false, true)) { proxy.close(); return }
-
         try {
-            // Bitmap gốc để hiển thị và crop OCR
             val fullBitmap = proxy.toBitmap()
 
-            // Bitmap nhỏ để detect — nhanh hơn 4x
-            val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
-            val dets = detector.detect(smallBitmap)
+            // BƯỚC 1: Vẽ box từ inference LẦN TRƯỚC lên frame hiện tại → display ngay
+            val display = drawDetections(fullBitmap, lastDetections, lastFrameW, lastFrameH)
+            runOnUiThread { cameraImageView.setImageBitmap(display) }
 
-            // Scale tọa độ box từ 320x240 về kích thước gốc
-            val scaleX = fullBitmap.width.toFloat() / detectW
-            val scaleY = fullBitmap.height.toFloat() / detectH
-            val scaledDets = dets.map { det ->
-                det.copy(
-                    x1 = det.x1 * scaleX,
-                    y1 = det.y1 * scaleY,
-                    x2 = det.x2 * scaleX,
-                    y2 = det.y2 * scaleY
-                )
-            }
+            // BƯỚC 2: Nếu inference đang rảnh → chạy inference frame này
+            if (isInferencing.compareAndSet(false, true)) {
+                val smallBitmap = Bitmap.createScaledBitmap(fullBitmap, detectW, detectH, true)
 
-            // Vẽ box lên bitmap gốc
-            val drawn = drawDetections(fullBitmap, scaledDets)
+                cameraExecutor.execute {
+                    try {
+                        val dets = detector.detect(smallBitmap)
 
-            runOnUiThread {
-                cameraImageView.setImageBitmap(drawn)
-            }
-
-            for (det in scaledDets.take(5)) {
-                val sign = signRepository.getSign(det.signId) ?: continue
-                if (!signRepository.shouldAnnounce(det.signId)) continue
-
-                if (det.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
-                    val cropped = cropBitmap(fullBitmap, det.x1, det.y1, det.x2, det.y2)
-                    ocrHelper.recognizeSpeed(cropped) { speed ->
-                        runOnUiThread {
-                            adapter.addSign(sign)
-                            speak(signRepository.buildTtsText(sign, speed))
+                        // Scale tọa độ về kích thước gốc
+                        val scaleX = fullBitmap.width.toFloat() / detectW
+                        val scaleY = fullBitmap.height.toFloat() / detectH
+                        val scaledDets = dets.map { det ->
+                            det.copy(
+                                x1 = det.x1 * scaleX, y1 = det.y1 * scaleY,
+                                x2 = det.x2 * scaleX, y2 = det.y2 * scaleY
+                            )
                         }
-                    }
-                } else {
-                    runOnUiThread {
-                        adapter.addSign(sign)
-                        speak(signRepository.buildTtsText(sign, null))
+
+                        // Lưu kết quả để vẽ lên frame tiếp theo
+                        lastDetections = scaledDets
+                        lastFrameW = fullBitmap.width
+                        lastFrameH = fullBitmap.height
+
+                        // Xử lý TTS + list
+                        for (det in scaledDets.take(5)) {
+                            val sign = signRepository.getSign(det.signId) ?: continue
+                            if (!signRepository.shouldAnnounce(det.signId)) continue
+
+                            if (det.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
+                                val cropped = cropBitmap(fullBitmap, det.x1, det.y1, det.x2, det.y2)
+                                ocrHelper.recognizeSpeed(cropped) { speed ->
+                                    runOnUiThread {
+                                        adapter.addSign(sign)
+                                        recyclerView.scrollToPosition(0)
+                                        speak(signRepository.buildTtsText(sign, speed))
+                                    }
+                                }
+                            } else {
+                                runOnUiThread {
+                                    adapter.addSign(sign)
+                                    recyclerView.scrollToPosition(0)
+                                    speak(signRepository.buildTtsText(sign, null))
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Inference error", e)
+                    } finally {
+                        isInferencing.set(false)
                     }
                 }
             }
@@ -162,15 +174,28 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.e(TAG, "processFrame error", e)
         } finally {
             proxy.close()
-            isAnalyzing.set(false)
         }
     }
 
-    private fun drawDetections(src: Bitmap, dets: List<Detection>): Bitmap {
+    private fun drawDetections(
+        src: Bitmap,
+        dets: List<Detection>,
+        frameW: Int,
+        frameH: Int
+    ): Bitmap {
         val out = src.copy(Bitmap.Config.ARGB_8888, true)
+        if (dets.isEmpty()) return out
         val canvas = Canvas(out)
+
+        // Scale tọa độ từ frameW/frameH về src.width/src.height phòng khi kích thước khác nhau
+        val scaleX = src.width.toFloat() / frameW.coerceAtLeast(1)
+        val scaleY = src.height.toFloat() / frameH.coerceAtLeast(1)
+
         for (det in dets) {
-            val rect = RectF(det.x1, det.y1, det.x2, det.y2)
+            val rect = RectF(
+                det.x1 * scaleX, det.y1 * scaleY,
+                det.x2 * scaleX, det.y2 * scaleY
+            )
             canvas.drawRect(rect, boxPaint)
             val label = "${det.signId} ${(det.confidence * 100).toInt()}%"
             val tw = textPaint.measureText(label)

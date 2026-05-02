@@ -30,9 +30,11 @@ class SignListAdapter(private val context: Context) : RecyclerView.Adapter<SignL
         holder.tvCode.text = sign.id
         holder.tvName.text = sign.name
 
-        // Load icon từ assets/templates/
+        // Tên file: lowercase, bỏ dấu chấm và dấu gạch dưới
+        // Ví dụ: P.124A_1 → p124a1.png
+        val iconName = sign.id.lowercase().replace(".", "").replace("_", "")
         try {
-            val bitmap = context.assets.open("templates/${sign.id.lowercase().replace(".", "")}.png")
+            val bitmap = context.assets.open("templates/$iconName.png")
                 .use { BitmapFactory.decodeStream(it) }
             holder.ivIcon.setImageBitmap(bitmap)
         } catch (e: Exception) {
@@ -43,13 +45,9 @@ class SignListAdapter(private val context: Context) : RecyclerView.Adapter<SignL
     override fun getItemCount() = items.size
 
     fun addSign(sign: TrafficSign) {
-        // Không thêm trùng liên tiếp
         if (items.firstOrNull()?.id == sign.id) return
-
         items.add(0, sign)
         notifyItemInserted(0)
-
-        // Xóa item thứ 21 nếu vượt quá giới hạn
         if (items.size > maxItems) {
             items.removeAt(items.size - 1)
             notifyItemRemoved(items.size)
