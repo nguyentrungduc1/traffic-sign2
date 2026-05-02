@@ -6,16 +6,29 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <ImageView
-        android:id="@+id/camera_image_view"
+    <FrameLayout
+        android:id="@+id/camera_container"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:scaleType="fitCenter"
         android:background="#000000"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/recycler_view" />
+        app:layout_constraintEnd_toStartOf="@id/recycler_view">
+
+        <androidx.camera.view.PreviewView
+            android:id="@+id/preview_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000"
+            app:scaleType="fitCenter" />
+
+        <com.ducnguyen.trafficsign.ui.DetectionOverlayView
+            android:id="@+id/detection_overlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+    </FrameLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/recycler_view"
@@ -27,6 +40,6 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintWidth_percent="0.30"
-        app:layout_constraintStart_toEndOf="@id/camera_image_view" />
+        app:layout_constraintStart_toEndOf="@id/camera_container" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

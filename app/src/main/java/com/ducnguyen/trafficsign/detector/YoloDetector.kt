@@ -18,6 +18,11 @@ class YoloDetector(context: Context) {
     private val confThreshold = 0.25f
     private val iouThreshold = 0.45f
     private val numClasses = 70
+    private val inputBuffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4).apply {
+        order(ByteOrder.nativeOrder())
+    }
+    private val pixels = IntArray(inputSize * inputSize)
+    private val output = Array(1) { Array(74) { FloatArray(8400) } }
 
     companion object {
         private const val MODEL_PATH = "model/yolo_traffic_sign.tflite"
@@ -45,26 +50,23 @@ class YoloDetector(context: Context) {
         return inputStream.channel.map(FileChannel.MapMode.READ_ONLY, afd.startOffset, afd.declaredLength)
     }
 
+    @Synchronized
     fun detect(bitmap: Bitmap): List<Detection> {
         val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
-        val inputBuffer = bitmapToByteBuffer(resized)
-        val output = Array(1) { Array(74) { FloatArray(8400) } }
+        bitmapToByteBuffer(resized)
         interpreter.run(inputBuffer, output)
         return parseOutput(output[0], bitmap.width, bitmap.height)
     }
 
-    private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * 4)
-        buffer.order(ByteOrder.nativeOrder())
-        val pixels = IntArray(inputSize * inputSize)
+    private fun bitmapToByteBuffer(bitmap: Bitmap) {
+        inputBuffer.rewind()
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
         for (pixel in pixels) {
-            buffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
-            buffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
-            buffer.putFloat((pixel and 0xFF) / 255.0f)
+            inputBuffer.putFloat(((pixel shr 16) and 0xFF) / 255.0f)
+            inputBuffer.putFloat(((pixel shr 8) and 0xFF) / 255.0f)
+            inputBuffer.putFloat((pixel and 0xFF) / 255.0f)
         }
-        buffer.rewind()
-        return buffer
+        inputBuffer.rewind()
     }
 
     private fun parseOutput(output: Array<FloatArray>, origW: Int, origH: Int): List<Detection> {

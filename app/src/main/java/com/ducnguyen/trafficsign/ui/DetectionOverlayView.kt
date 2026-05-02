@@ -1,7 +1,11 @@
 package com.ducnguyen.trafficsign.ui
 
 import android.content.Context
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.View
 import com.ducnguyen.trafficsign.model.Detection
@@ -11,49 +15,48 @@ class DetectionOverlayView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private val boxPaint = Paint().apply {
-        color = Color.GREEN; strokeWidth = 4f; style = Paint.Style.STROKE
+        color = Color.GREEN
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
     }
     private val textBgPaint = Paint().apply {
-        color = Color.GREEN; style = Paint.Style.FILL
+        color = Color.GREEN
+        style = Paint.Style.FILL
     }
     private val textPaint = Paint().apply {
-        color = Color.BLACK; textSize = 32f
-        style = Paint.Style.FILL; typeface = Typeface.DEFAULT_BOLD
+        color = Color.BLACK
+        textSize = 32f
+        style = Paint.Style.FILL
+        typeface = Typeface.DEFAULT_BOLD
     }
 
     private var detections: List<Detection> = emptyList()
-    private var frameW: Int = 640
-    private var frameH: Int = 480
 
-    fun updateDetections(dets: List<Detection>, fw: Int, fh: Int) {
-        detections = dets; frameW = fw; frameH = fh
+    fun updateDetections(dets: List<Detection>) {
+        detections = dets
         postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (frameW <= 0 || frameH <= 0) return
-
-        // FIT_CENTER: giữ aspect ratio, căn giữa
-        val scale = minOf(width.toFloat() / frameW, height.toFloat() / frameH)
-        val dx = (width - frameW * scale) / 2f
-        val dy = (height - frameH * scale) / 2f
 
         for (det in detections) {
-            val rect = RectF(
-                det.x1 * scale + dx,
-                det.y1 * scale + dy,
-                det.x2 * scale + dx,
-                det.y2 * scale + dy
-            )
+            val rect = RectF(det.x1, det.y1, det.x2, det.y2)
             canvas.drawRect(rect, boxPaint)
 
             val label = "${det.signId} ${(det.confidence * 100).toInt()}%"
-            val tw = textPaint.measureText(label)
-            val th = textPaint.textSize
-            val textTop = (rect.top - th - 4f).coerceAtLeast(dy)
-            canvas.drawRect(rect.left, textTop, rect.left + tw + 8f, textTop + th + 8f, textBgPaint)
-            canvas.drawText(label, rect.left + 4f, textTop + th, textPaint)
+            val textWidth = textPaint.measureText(label)
+            val textHeight = textPaint.textSize
+            val textTop = (rect.top - textHeight - 4f).coerceAtLeast(0f)
+
+            canvas.drawRect(
+                rect.left,
+                textTop,
+                rect.left + textWidth + 8f,
+                textTop + textHeight + 8f,
+                textBgPaint
+            )
+            canvas.drawText(label, rect.left + 4f, textTop + textHeight, textPaint)
         }
     }
 }
