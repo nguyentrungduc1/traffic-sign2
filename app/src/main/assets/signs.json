@@ -611,7 +611,7 @@
     "color_main": "red",
     "color_bg": "white",
     "description": "Giới hạn tốc độ theo làn đường",
-    "tts_text": "Chú ý, giới hạn tốc độ theo làn đường, chú ý biển báo",
+    "tts_text": "Chú ý, giới hạn tốc độ theo làn đường",
     "template_image": "p127b.png"
   },
   {
@@ -624,7 +624,7 @@
     "color_main": "red",
     "color_bg": "white",
     "description": "Giới hạn tốc độ theo phương tiện trên từng làn đường",
-    "tts_text": "Chú ý, giới hạn tốc độ theo phương tiện từng làn, chú ý biển báo",
+    "tts_text": "Chú ý, giới hạn tốc độ theo phương tiện từng làn",
     "template_image": "p127c.png"
   },
   {

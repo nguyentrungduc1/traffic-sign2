@@ -51,6 +51,7 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     private var lastAnalysisTimeMs = 0L
     private var lastDebugLogTimeMs = 0L
+    private var lastGenericWarningTimeMs = 0L
 
     private val detectW = 320
     private val detectH = 240
@@ -60,6 +61,9 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         private const val CAMERA_PERMISSION = Manifest.permission.CAMERA
         private const val REQUEST_CODE = 100
         private const val MIN_ANALYSIS_INTERVAL_MS = 80L
+        private const val DETAIL_CONFIDENCE_THRESHOLD = 0.50f
+        private const val GENERIC_WARNING_INTERVAL_MS = 3000L
+        private const val GENERIC_WARNING_TEXT = "Chú ý biển báo"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -212,15 +216,33 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun handleAnnouncements(bitmap: Bitmap, detections: List<Detection>) {
         for (detection in detections.take(5)) {
-            val sign = signRepository.getSign(detection.signId) ?: continue
-            if (!signRepository.shouldAnnounce(detection.signId)) continue
+            if (detection.confidence <= DETAIL_CONFIDENCE_THRESHOLD) {
+                speakGenericWarning()
+                continue
+            }
 
-            if (detection.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
+            val sign = signRepository.getSign(detection.signId) ?: continue
+
+            if (detection.signId == "P.127") {
+                if (!isOcrRunning.compareAndSet(false, true)) continue
+                val cropped = cropBitmap(bitmap, detection.x1, detection.y1, detection.x2, detection.y2)
+                ocrHelper.recognizeSpeed(cropped) { speed ->
+                    isOcrRunning.set(false)
+                    if (speed == null) return@recognizeSpeed
+                    runOnUiThread {
+                        if (!signRepository.shouldAnnounce(detection.signId)) return@runOnUiThread
+                        adapter.addSign(sign)
+                        recyclerView.scrollToPosition(0)
+                        speak(signRepository.buildTtsText(sign, speed))
+                    }
+                }
+            } else if (detection.signId in SpeedOcrHelper.OCR_SIGN_IDS) {
                 if (!isOcrRunning.compareAndSet(false, true)) continue
                 val cropped = cropBitmap(bitmap, detection.x1, detection.y1, detection.x2, detection.y2)
                 ocrHelper.recognizeSpeed(cropped) { speed ->
                     isOcrRunning.set(false)
                     runOnUiThread {
+                        if (!signRepository.shouldAnnounce(detection.signId)) return@runOnUiThread
                         adapter.addSign(sign)
                         recyclerView.scrollToPosition(0)
                         speak(signRepository.buildTtsText(sign, speed))
@@ -228,12 +250,20 @@ class CameraActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             } else {
                 runOnUiThread {
+                    if (!signRepository.shouldAnnounce(detection.signId)) return@runOnUiThread
                     adapter.addSign(sign)
                     recyclerView.scrollToPosition(0)
                     speak(signRepository.buildTtsText(sign, null))
                 }
             }
         }
+    }
+
+    private fun speakGenericWarning() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastGenericWarningTimeMs < GENERIC_WARNING_INTERVAL_MS) return
+        lastGenericWarningTimeMs = now
+        runOnUiThread { speak(GENERIC_WARNING_TEXT) }
     }
 
     private fun cropBitmap(bmp: Bitmap, x1: Float, y1: Float, x2: Float, y2: Float): Bitmap {
